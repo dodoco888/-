@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>太陽系解析シミュレーター - 速度調整版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Helvetica Neue', Arial, sans-serif; color: white; }
+        canvas { display: block; }
+        #ui { 
+            position: absolute; top: 20px; left: 20px; background: rgba(0, 0, 0, 0.85); 
+            padding: 20px; border-radius: 12px; width: 280px; border: 1px solid #444; z-index: 100;
+        }
+        .control-group { margin-bottom: 15px; }
+        label { display: block; font-size: 0.8em; margin-bottom: 5px; color: #aaa; text-transform: uppercase; }
+        input[type="range"], input[type="date"] { width: 100%; box-sizing: border-box; background: #222; border: 1px solid #444; color: white; padding: 8px; border-radius: 4px; }
+        .stats { font-size: 1.2em; font-weight: bold; color: #00ffcc; margin-top: 15px; border-top: 1px solid #333; padding-top: 15px; }
+        #alignment-bar { width: 100%; height: 8px; background: #333; border-radius: 4px; margin-top: 8px; overflow: hidden; }
+        #alignment-fill { height: 100%; background: linear-gradient(90deg, #00ffcc, #00ffaa); width: 0%; transition: width 0.1s; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h3 style="margin:0 0 15px 0; font-size: 1.1em; border-bottom: 1px solid #444; padding-bottom: 10px;">Solar System Analyzer</h3>
+    <div class="control-group">
+        <label>日付選択</label>
+        <input type="date" id="datePicker" value="2020-12-21">
+    </div>
+    <div class="control-group">
+        <label>進む速度: <span id="speedVal">0.0</span></label>
+        <input type="range" id="speedRange" min="-50" max="50" step="1" value="0">
+    </div>
+    <div class="stats">
+        <div id="dateDisplay">2020/12/21</div>
+        <div style="font-size: 0.65em; color: #888; margin-top:10px;">ALIGNMENT (集合度)</div>
+        <div id="alignText">0.0 %</div>
+        <div id="alignment-bar"><div id="alignment-fill"></div></div>
+    </div>
+</div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+}
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 10000);
+    camera.position.set(0, 300, 500);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    const loader = new THREE.TextureLoader();
+
+    // 内部時間はミリ秒で保持（より精密に動かすため）
+    let currentMilli = new Date("2020-12-21T12:00:00").getTime();
+    const J2000 = new Date('2000-01-01T12:00:00Z').getTime();
+
+    function createTextCanvas(text) {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = 256; canvas.height = 128;
+        context.font = 'Bold 40px Arial';
+        context.fillStyle = 'white';
+        context.textAlign = 'center';
+        context.fillText(text, 128, 64);
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    const sunGeo = new THREE.SphereGeometry(25, 64, 64);
+    const sunMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+    const sun = new THREE.Mesh(sunGeo, sunMat);
+    scene.add(sun);
+    loader.load('https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/sun.jpg', (t) => { sunMat.map = t; sunMat.needsUpdate = true; });
+
+    const planetData = [
+        { name: "水星", dist: 55, size: 2.5, period: 87.97, color: 0xaaaaaa, tex: 'mercury.jpg' },
+        { name: "金星", dist: 85, size: 4.0, period: 224.7, color: 0xffccaa, tex: 'venus_surface.jpg' },
+        { name: "地球", dist: 125, size: 4.2, period: 365.26, color: 0x2277ff, tex: 'earth_atmos_2048.jpg' },
+        { name: "火星", dist: 165, size: 3.0, period: 686.98, color: 0xff4400, tex: 'mars.jpg' },
+        { name: "木星", dist: 250, size: 12, period: 4332.59, color: 0xffa500, tex: 'jupiter.jpg' },
+        { name: "土星", dist: 340, size: 10, period: 10759.22, color: 0xdfd09e, tex: 'saturn.jpg', hasRing: true }
+    ];
+
+    const planets = planetData.map(data => {
+        const group = new THREE.Group();
+        const mesh = new THREE.Mesh(new THREE.SphereGeometry(data.size, 64, 64), new THREE.MeshStandardMaterial({ color: data.color }));
+        loader.load(`https://raw.githubusercontent.com/mrdoob/three.js/master/examples/textures/planets/${data.tex}`, (t) => {
+            mesh.material.map = t; mesh.material.color.set(0xffffff);
+        });
+        group.add(mesh);
+
+        if (data.hasRing) {
+            const ring = new THREE.Mesh(new THREE.RingGeometry(data.size * 1.5, data.size * 2.6, 64), new THREE.MeshStandardMaterial({ color: 0x888888, side: THREE.DoubleSide, transparent: true, opacity: 0.6 }));
+            ring.rotation.x = Math.PI / 2;
+            group.add(ring);
+        }
+
+        const labelMat = new THREE.SpriteMaterial({ map: createTextCanvas(data.name), transparent: true });
+        const label = new THREE.Sprite(labelMat);
+        label.scale.set(30, 15, 1);
+        label.position.set(0, data.size + 10, 0);
+        group.add(label);
+
+        const orbit = new THREE.Mesh(new THREE.RingGeometry(data.dist - 0.5, data.dist + 0.5, 128), new THREE.MeshBasicMaterial({ color: 0x222222, side: THREE.DoubleSide }));
+        orbit.rotation.x = Math.PI / 2;
+        scene.add(orbit);
+
+        scene.add(group);
+        return { ...data, group, mesh };
+    });
+
+    scene.add(new THREE.PointLight(0xffffff, 20000, 3000));
+    scene.add(new THREE.AmbientLight(0x444444));
+    
+    // 星空
+    const starGeo = new THREE.BufferGeometry();
+    const starCoords = [];
+    for(let i=0; i<10000; i++) starCoords.push((Math.random()-0.5)*5000, (Math.random()-0.5)*4000, (Math.random()-0.5)*5000);
+    starGeo.setAttribute('position', new THREE.Float32BufferAttribute(starCoords, 3));
+    scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({color: 0xffffff, size: 0.8})));
+
+    const datePicker = document.getElementById('datePicker');
+    const speedRange = document.getElementById('speedRange');
+
+    function updateView() {
+        const date = new Date(currentMilli);
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        const dateStr = `${y}-${m}-${d}`;
+        
+        document.getElementById('dateDisplay').innerText = dateStr.replace(/-/g, '/');
+        // 自動更新中にカレンダーも追従させる
+        if (parseFloat(speedRange.value) !== 0) {
+            datePicker.value = dateStr;
+        }
+
+        const diffDays = (currentMilli - J2000) / (1000 * 60 * 60 * 24);
+        let angles = [];
+
+        planets.forEach(p => {
+            const angle = (diffDays / p.period) * Math.PI * 2;
+            p.group.position.x = Math.cos(angle) * p.dist;
+            p.group.position.z = Math.sin(angle) * p.dist;
+            p.mesh.rotation.y += 0.01;
+            angles.push(((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2));
+        });
+
+        angles.sort((a, b) => a - b);
+        let maxGap = 0;
+        for(let i=0; i < angles.length; i++) {
+            let gap = (i === angles.length - 1) ? (Math.PI * 2 - angles[i] + angles[0]) : (angles[i+1] - angles[i]);
+            if(gap > maxGap) maxGap = gap;
+        }
+        const score = Math.max(0, ( (maxGap - (Math.PI*2/6)) / (Math.PI*2 - (Math.PI*2/6)) ) * 100);
+        const finalScore = 100 - score;
+
+        document.getElementById('alignText').innerText = finalScore.toFixed(1) + "%";
+        document.getElementById('alignment-fill').style.width = finalScore + "%";
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const speedInput = parseFloat(speedRange.value);
+        document.getElementById('speedVal').innerText = (speedInput / 10).toFixed(1);
+        
+        if(speedInput !== 0) {
+            // スライダーの値に応じて、1フレームあたりに進むミリ秒を調整
+            // (1日 = 86400000ms) / 60fps * スピード係数
+            currentMilli += (speedInput / 100) * 86400000 / 60;
+        }
+        
+        updateView();
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    datePicker.addEventListener('input', () => {
+        currentMilli = new Date(datePicker.value + "T12:00:00").getTime();
+        updateView();
+    });
+
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
